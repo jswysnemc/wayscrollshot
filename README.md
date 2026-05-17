@@ -92,6 +92,16 @@ OpenCV development files and Clang are required when building from source.
 
 ## Installation
 
+### Debian / Ubuntu
+
+Download the `.deb` package that matches your Ubuntu release and CPU architecture from GitHub Releases, then install it with `apt`:
+
+```bash
+sudo apt install ./wayscrollshot_0.1.7-1ubuntu26.04_amd64.deb
+```
+
+The Debian packages are built separately for each Ubuntu release so OpenCV runtime dependencies match that release's ABI. Do not work around missing OpenCV libraries by symlinking a different OpenCV version.
+
 ### From Source
 
 ```bash

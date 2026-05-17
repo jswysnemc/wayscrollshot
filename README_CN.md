@@ -92,11 +92,21 @@ wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了
 
 ## 安装
 
+### Debian / Ubuntu
+
+从 GitHub Releases 下载与 Ubuntu 版本和 CPU 架构匹配的 `.deb` 包，然后用 `apt` 安装：
+
+```bash
+sudo apt install ./wayscrollshot_0.1.7-1ubuntu26.04_amd64.deb
+```
+
+Debian 包会按 Ubuntu 版本分别构建，OpenCV 运行时依赖会匹配对应发行版的 ABI。不要通过软链接不同版本的 OpenCV 库绕过缺失库错误。
+
 ### 从源码构建
 
 ```bash
 # 安装运行时和构建依赖（Arch Linux）
-sudo pacman -S slurp grim wl-clipboard opencv clang
+sudo pacman -S slurp grim wl-clipboard opencv clang libxkbcommon
 
 # 构建
 cargo build --release
