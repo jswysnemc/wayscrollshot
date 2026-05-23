@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 
-use crate::capture::{capture_frame, select_region};
+use crate::capture::{
+    capture_frame, read_region_from_stdin, region_from_slurp_output, select_region,
+};
 use crate::cli::{Algorithm, Args};
 use crate::output::{copy_to_clipboard, save_image};
 use crate::overlay::LayerShellOverlay;
@@ -25,7 +27,7 @@ pub fn run(args: Args) -> Result<()> {
         bail!("Wayland session required (X11 not supported)");
     }
 
-    let region = select_region().context("slurp selection failed")?;
+    let region = resolve_region(&args)?;
     log::info!(
         "Capture region: {},{} {}x{}",
         region.x,
@@ -79,6 +81,16 @@ pub fn run(args: Args) -> Result<()> {
         overlay.stop();
     }
     result
+}
+
+fn resolve_region(args: &Args) -> Result<Region> {
+    match args.slurp_output() {
+        Some(raw) if raw.trim() == "-" => {
+            read_region_from_stdin().context("failed to read slurp selection from stdin")
+        }
+        Some(raw) => region_from_slurp_output(&raw).context("invalid slurp selection"),
+        None => select_region().context("slurp selection failed"),
+    }
 }
 
 /// Handles overlay commands and finalization while capture worker is running.

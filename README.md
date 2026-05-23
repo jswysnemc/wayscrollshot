@@ -68,7 +68,7 @@ The algorithm finds where Frame 2's top matches Frame 1's content, then appends 
 
 | Tool / Library | Purpose | Required |
 |----------------|---------|----------|
-| `slurp` | Region selection | Yes |
+| `slurp` | Region selection | Unless `REGION` is provided |
 | `grim` | Screen capture | Yes |
 | OpenCV | Default stitching algorithm | Yes |
 | `wl-copy` | Clipboard (Wayland) | For clipboard feature |
@@ -158,6 +158,12 @@ wayscrollshot --no-preview
 # Disable region border overlay
 wayscrollshot --no-border
 
+# Use an existing slurp selection
+wayscrollshot "$(slurp)"
+
+# Read slurp output from stdin
+slurp | wayscrollshot -
+
 # Use different stitching algorithms
 wayscrollshot -a opencv-orb  # Default: ORB feature matching + RANSAC
 wayscrollshot -a col-sample  # Fast column sampling
@@ -176,6 +182,7 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
 | `-a, --algorithm <ALG>` | Stitching algorithm: `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | opencv-orb |
+| `REGION` | Existing slurp/grim geometry, for example `10,20 300x400`; use `-` to read stdin | Run `slurp` interactively |
 
 ### Controls
 

@@ -47,10 +47,65 @@ pub struct Args {
     /// Stitching algorithm to use
     #[arg(short, long, value_enum, default_value_t = Algorithm::OpenCvOrb)]
     pub algorithm: Algorithm,
+
+    /// Existing slurp geometry to use instead of selecting a region. Use '-' to read from stdin.
+    #[arg(value_name = "REGION", num_args = 0..=2, allow_hyphen_values = true)]
+    pub region: Vec<String>,
 }
 
 impl Args {
     pub fn parse_args() -> Self {
         Args::parse()
+    }
+
+    pub fn slurp_output(&self) -> Option<String> {
+        if self.region.is_empty() {
+            None
+        } else {
+            Some(self.region.join(" "))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    #[test]
+    fn parses_quoted_slurp_region() {
+        let args = Args::try_parse_from(["wayscrollshot", "10,20 300x400"]).unwrap();
+
+        assert_eq!(args.slurp_output().as_deref(), Some("10,20 300x400"));
+    }
+
+    #[test]
+    fn parses_unquoted_slurp_region_parts() {
+        let args = Args::try_parse_from(["wayscrollshot", "10,20", "300x400"]).unwrap();
+
+        assert_eq!(args.slurp_output().as_deref(), Some("10,20 300x400"));
+    }
+
+    #[test]
+    fn parses_stdin_region_marker() {
+        let args = Args::try_parse_from(["wayscrollshot", "-"]).unwrap();
+
+        assert_eq!(args.slurp_output().as_deref(), Some("-"));
+    }
+
+    #[test]
+    fn parses_negative_slurp_coordinates() {
+        let args = Args::try_parse_from(["wayscrollshot", "-1920,-10", "800x600"]).unwrap();
+
+        assert_eq!(args.slurp_output().as_deref(), Some("-1920,-10 800x600"));
+    }
+
+    #[test]
+    fn keeps_existing_flags_with_region() {
+        let args = Args::try_parse_from(["wayscrollshot", "-c", "10,20", "300x400"]).unwrap();
+
+        assert!(args.clipboard);
+        assert_eq!(args.slurp_output().as_deref(), Some("10,20 300x400"));
     }
 }

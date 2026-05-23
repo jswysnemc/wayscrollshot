@@ -68,7 +68,7 @@ wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了
 
 | 工具 / 库 | 用途 | 必需 |
 |-----------|------|------|
-| `slurp` | 区域选择 | 是 |
+| `slurp` | 区域选择 | 未传入 `REGION` 时需要 |
 | `grim` | 屏幕捕获 | 是 |
 | OpenCV | 默认拼接算法 | 是 |
 | `wl-copy` | 剪贴板（Wayland） | 剪贴板功能需要 |
@@ -158,6 +158,12 @@ wayscrollshot --no-preview
 # 禁用区域边框覆盖层
 wayscrollshot --no-border
 
+# 使用已有 slurp 选择结果
+wayscrollshot "$(slurp)"
+
+# 从标准输入读取 slurp 输出
+slurp | wayscrollshot -
+
 # 使用不同的拼接算法
 wayscrollshot -a opencv-orb  # 默认：ORB 特征匹配 + RANSAC
 wayscrollshot -a col-sample  # 快速列采样
@@ -176,6 +182,7 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 | `--no-preview` | 禁用预览窗口 | false |
 | `--no-border` | 禁用区域边框覆盖层 | false |
 | `-a, --algorithm <ALG>` | 拼接算法：`opencv-orb`、`col-sample`、`template`、`edge`、`fast` | opencv-orb |
+| `REGION` | 已有 slurp/grim 几何区域，例如 `10,20 300x400`；使用 `-` 从标准输入读取 | 交互运行 `slurp` |
 
 ### 控制方式
 

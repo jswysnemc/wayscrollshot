@@ -1,3 +1,4 @@
+use std::io::{self, Read};
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -20,7 +21,26 @@ pub fn select_region() -> Result<Region> {
         bail!("slurp returned empty selection");
     }
     log::debug!("slurp output: {}", raw);
-    parse_region(&raw)
+    region_from_slurp_output(&raw)
+}
+
+/// Parses an existing `slurp` geometry output.
+pub fn region_from_slurp_output(raw: &str) -> Result<Region> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("slurp output is empty");
+    }
+    log::debug!("using slurp output: {}", raw);
+    parse_region(raw)
+}
+
+/// Reads `slurp` geometry output from stdin.
+pub fn read_region_from_stdin() -> Result<Region> {
+    let mut raw = String::new();
+    io::stdin()
+        .read_to_string(&mut raw)
+        .context("failed to read slurp output from stdin")?;
+    region_from_slurp_output(&raw)
 }
 
 fn parse_region(raw: &str) -> Result<Region> {
@@ -38,7 +58,7 @@ fn parse_region(raw: &str) -> Result<Region> {
     let w: u32 = w_str.parse()?;
     let h: u32 = h_str.parse()?;
     Ok(Region {
-        raw: raw.to_string(),
+        raw: format!("{x},{y} {w}x{h}"),
         x,
         y,
         w,
@@ -68,4 +88,43 @@ pub fn capture_frame(region: &Region) -> Result<RgbaImage> {
     }
     let image = image::load_from_memory(&output.stdout)?;
     Ok(image.to_rgba8())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::region_from_slurp_output;
+
+    #[test]
+    fn parses_slurp_geometry() {
+        let region = region_from_slurp_output("10,20 300x400").unwrap();
+
+        assert_eq!(region.raw, "10,20 300x400");
+        assert_eq!(region.x, 10);
+        assert_eq!(region.y, 20);
+        assert_eq!(region.w, 300);
+        assert_eq!(region.h, 400);
+    }
+
+    #[test]
+    fn parses_negative_coordinates() {
+        let region = region_from_slurp_output("-1920,-10 800x600").unwrap();
+
+        assert_eq!(region.raw, "-1920,-10 800x600");
+        assert_eq!(region.x, -1920);
+        assert_eq!(region.y, -10);
+        assert_eq!(region.w, 800);
+        assert_eq!(region.h, 600);
+    }
+
+    #[test]
+    fn normalizes_whitespace() {
+        let region = region_from_slurp_output("  10,20\t300x400\n").unwrap();
+
+        assert_eq!(region.raw, "10,20 300x400");
+    }
+
+    #[test]
+    fn rejects_empty_output() {
+        assert!(region_from_slurp_output("\n").is_err());
+    }
 }
