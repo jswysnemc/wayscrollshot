@@ -1,6 +1,7 @@
 mod capture;
 mod cli;
 mod constants;
+mod opencv_compat;
 mod output;
 mod overlay;
 mod region_overlay;

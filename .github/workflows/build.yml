@@ -59,7 +59,6 @@ jobs:
 
   build-archlinux:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
     container: archlinux:latest
     steps:
       - name: Install dependencies
@@ -69,10 +68,14 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Test
+        run: cargo test --locked
+
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: wayscrollshot-archlinux-x86_64

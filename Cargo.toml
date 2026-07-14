@@ -12,7 +12,7 @@ hora = "0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 imageproc = "0.24"
 log = "0.4"
-opencv = { version = "0.98", default-features = false, features = ["clang-runtime", "calib3d", "features2d", "imgproc"] }
+opencv = { version = "0.99", default-features = false, features = ["clang-runtime", "calib3d", "features", "features2d", "geometry", "imgproc"] }
 rayon = "1.10"
 smithay-client-toolkit = "0.19"
 tiny-skia = "0.11"
