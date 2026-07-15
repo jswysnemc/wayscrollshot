@@ -60,6 +60,8 @@ jobs:
   build-archlinux:
     runs-on: ubuntu-latest
     container: archlinux:latest
+    env:
+      OPENCV_PKGCONFIG_NAME: opencv5
     steps:
       - name: Install dependencies
         run: |
