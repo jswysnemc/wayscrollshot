@@ -1,19 +1,21 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::io::{self, BufRead, IsTerminal};
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 
-use crate::capture::{
-    capture_frame, read_region_from_stdin, region_from_slurp_output, select_region,
-};
+use crate::capture::{read_region_from_stdin, region_from_slurp_output, select_region, Capturer};
 use crate::cli::{Algorithm, Args};
 use crate::output::{copy_to_clipboard, save_image};
 use crate::overlay::LayerShellOverlay;
 use crate::region_overlay::RegionOverlay;
 use crate::stitch::{build_preview, init_opencv_runtime, MatchConfig, StitchOutcome, Stitcher};
 use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
+
+// ===== 新增 import =====
+use crate::capture::gnome::GnomeControls;
 
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(45);
 const SIGNATURE_COLS: u32 = 18;
@@ -36,30 +38,22 @@ pub fn run(args: Args) -> Result<()> {
         region.h
     );
 
-    let mut region_overlay = if args.no_border {
-        None
-    } else {
-        Some(RegionOverlay::new(region.clone())?)
-    };
+    let capturer = Capturer::new(args.backend)?;
+
+    let mut region_overlay = start_region_border(&args, &region);
 
     let control = Arc::new(Control::new());
     let state = Arc::new(Mutex::new(StitchState::default()));
 
     let (command_tx, command_rx) = mpsc::channel();
 
-    let mut layer_overlay = if args.no_preview {
-        None
-    } else {
-        Some(LayerShellOverlay::new(
-            command_tx.clone(),
-            region.clone(),
-            args.preview_width,
-        )?)
-    };
+    let mut layer_overlay = start_preview_overlay(&args, &region, command_tx.clone());
+    let _fallback_controls = attach_fallback_controls(layer_overlay.is_none(), &region, command_tx);
 
     let preview_tx = layer_overlay.as_ref().and_then(|o| o.sender());
     let algorithm = args.algorithm;
     let worker = spawn_capture_worker(
+        capturer,
         region,
         control.clone(),
         state.clone(),
@@ -172,6 +166,7 @@ fn is_wayland_session() -> bool {
 
 /// Spawns background capture + stitching worker.
 fn spawn_capture_worker(
+    capturer: Capturer,
     region: Region,
     control: Arc<Control>,
     state: Arc<Mutex<StitchState>>,
@@ -204,6 +199,7 @@ fn spawn_capture_worker(
         let mut stitcher = Stitcher::new(config);
         let mut last_capture_end: Option<Instant> = None;
         let mut last_signature: Option<Vec<u8>> = None;
+        let mut last_capture_error: Option<String> = None;
 
         while control.is_running() {
             if control.is_paused() {
@@ -219,9 +215,10 @@ fn spawn_capture_worker(
                 }
             }
 
-            match capture_frame(&region) {
+            match capturer.capture(&region) {
                 Ok(frame) => {
                     last_capture_end = Some(Instant::now());
+                    last_capture_error = None;
 
                     let signature = frame_signature(&frame, SIGNATURE_COLS, SIGNATURE_ROWS);
                     if let Some(previous) = last_signature.as_ref() {
@@ -373,4 +370,117 @@ fn is_duplicate_signature(previous: &[u8], current: &[u8]) -> bool {
 
     let avg = sum / previous.len() as f32;
     avg <= DUPLICATE_AVG_DIFF && max_diff <= DUPLICATE_MAX_DIFF
+}
+
+/// layer-shell 不可用时仍保留命令发送端，避免会话立刻结束。
+struct FallbackControls {
+    _thread: Option<thread::JoinHandle<()>>,
+    _tx: Option<mpsc::Sender<UserCommand>>,
+}
+
+/// 尝试绘制区域边框；失败时继续捕获。
+///
+/// `args` 为命令行参数，`region` 为选区；返回边框句柄。
+fn start_region_border(args: &Args, region: &Region) -> Option<RegionOverlay> {
+    if args.no_border {
+        return None;
+    }
+    match RegionOverlay::new(region.clone()) {
+        Ok(overlay) => Some(overlay),
+        Err(err) => {
+            log::warn!("【区域边框】【启动】layer-shell 不可用: {err}");
+            None
+        }
+    }
+}
+
+/// 尝试启动预览浮层；GNOME 等没有 layer-shell 的合成器返回 None。
+///
+/// `command_tx` 接收浮层按钮；返回浮层句柄。
+fn start_preview_overlay(
+    args: &Args,
+    region: &Region,
+    command_tx: mpsc::Sender<UserCommand>,
+) -> Option<LayerShellOverlay> {
+    if args.no_preview {
+        return None;
+    }
+    match LayerShellOverlay::new(command_tx, region.clone(), args.preview_width) {
+        Ok(overlay) => Some(overlay),
+        Err(err) => {
+            log::warn!("【预览浮层】【启动】layer-shell 不可用: {err}");
+            None
+        }
+    }
+}
+
+/// 没有预览浮层时改用 GNOME 按钮或终端命令。
+///
+/// `needed` 表示浮层没有起来，`tx` 为会话命令通道；返回需保持存活的句柄。
+fn attach_fallback_controls(
+    needed: bool,
+    region: &Region,
+    tx: mpsc::Sender<UserCommand>,
+) -> FallbackControls {
+    if !needed {
+        return FallbackControls {
+            _thread: None,
+            _tx: None,
+        };
+    }
+    if crate::capture::gnome::is_gnome_session() {
+        match GnomeControls::spawn(region, tx.clone()) {
+            Ok(thread) => {
+                return FallbackControls {
+                    _thread: Some(thread),
+                    _tx: None,
+                };
+            }
+            Err(err) => {
+                log::error!("【GNOME 捕获】【控制条】启动失败: {err}");
+            }
+        }
+    }
+    if io::stdin().is_terminal() {
+        eprintln!(
+            "Preview overlay is unavailable. Type a command and press Enter: s save, c copy, p pause, q cancel"
+        );
+        return FallbackControls {
+            _thread: Some(spawn_stdin_commands(tx)),
+            _tx: None,
+        };
+    }
+    log::error!(
+        "【预览浮层】【回退】没有可用的控制界面。在终端中运行，或启用 GNOME 滚动助手。"
+    );
+    FallbackControls {
+        _thread: None,
+        _tx: Some(tx),
+    }
+}
+
+/// 从标准输入读取单行命令并转发；tx 为会话命令通道，返回线程句柄。
+fn spawn_stdin_commands(tx: mpsc::Sender<UserCommand>) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let command = match line.trim() {
+                "s" | "S" => UserCommand::Save,
+                "c" | "C" => UserCommand::Copy,
+                "p" | "P" => UserCommand::TogglePause,
+                "q" | "Q" => UserCommand::Cancel,
+                _ => continue,
+            };
+            let done = matches!(
+                command,
+                UserCommand::Save | UserCommand::Copy | UserCommand::Cancel
+            );
+            if tx.send(command).is_err() || done {
+                break;
+            }
+        }
+    })
 }

@@ -50,6 +50,11 @@ trap 'rm -rf "$tmpdir"' EXIT
 pkgroot="$tmpdir/pkg"
 install -Dm755 "$binary_path" "$pkgroot/usr/bin/$pkgname"
 install -Dm644 LICENSE "$pkgroot/usr/share/doc/$pkgname/copyright"
+install -Dm644 wayscrollshot.desktop "$pkgroot/usr/share/applications/$pkgname.desktop"
+extension_src="packaging/gnome-extension/wayscrollshot-scroll-helper@snemc.org"
+extension_dest="$pkgroot/usr/share/gnome-shell/extensions/wayscrollshot-scroll-helper@snemc.org"
+install -Dm644 "$extension_src/metadata.json" "$extension_dest/metadata.json"
+install -Dm644 "$extension_src/extension.js" "$extension_dest/extension.js"
 
 changelog="$tmpdir/changelog.Debian"
 cat >"$changelog" <<EOF
@@ -90,6 +95,12 @@ fi
 
 installed_size="$(du -sk "$pkgroot/usr" | cut -f1)"
 mkdir -p "$pkgroot/DEBIAN"
+cat >"$pkgroot/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+echo "GNOME users: enable wayscrollshot-scroll-helper@snemc.org, then log out once."
+echo "  gnome-extensions enable wayscrollshot-scroll-helper@snemc.org"
+EOF
+chmod 755 "$pkgroot/DEBIAN/postinst"
 cat >"$pkgroot/DEBIAN/control" <<EOF
 Package: $pkgname
 Version: $deb_version

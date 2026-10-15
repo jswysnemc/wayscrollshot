@@ -8,11 +8,11 @@ A scrolling screenshot tool for Wayland that captures and stitches images in rea
 ## Features
 
 - Real-time preview with automatic stitching
-- Column sampling algorithm for fast and accurate overlap detection
+- Eight-band stitch that ignores static sidebars and fixed header/footer bars
 - Rounded button UI with hover effects (powered by tiny-skia)
 - Keyboard shortcuts and mouse control
 - Save to file or copy to clipboard
-- Supports reverse scrolling (col-sample only)
+- Supports reverse scrolling (`band` and col-sample)
 
 ## How It Works
 
@@ -21,9 +21,20 @@ A scrolling screenshot tool for Wayland that captures and stitches images in rea
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
 │   Capture   │────>│   Stitcher   │────>│   Preview   │
-│   (grim)    │     │ (col-sample) │     │ (layer-shell)│
+│   (grim)    │     │    (band)    │     │ (layer-shell)│
 └─────────────┘     └──────────────┘     └─────────────┘
 ```
+
+### Default stitch (`band`)
+
+The default algorithm is the eight-band row signature used by mark-shot:
+
+1. Sample eight narrow vertical bands and build one brightness signature per row.
+2. Compare the new frame with the previous frame at the same rows. Bands that barely change are treated as a static sidebar and dropped from the match.
+3. Search for the scroll offset on the moving bands, then append only the new rows.
+4. Rows that stay identical at the top or bottom are treated as a fixed header or footer and are not repeated.
+
+`-a col-sample` still uses the older column sampler described below.
 
 ### Column Sampling Algorithm
 
@@ -69,10 +80,12 @@ The algorithm finds where Frame 2's top matches Frame 1's content, then appends 
 | Tool / Library | Purpose | Required |
 |----------------|---------|----------|
 | `slurp` | Region selection | Unless `REGION` is provided |
-| `grim` | Screen capture | Yes |
+| `grim` | Screen capture on wlroots compositors | wlroots only (not used on KDE) |
 | OpenCV | Default stitching algorithm | Yes |
 | `wl-copy` | Clipboard (Wayland) | For clipboard feature |
 | `xclip` | Clipboard (X11 fallback) | Alternative |
+
+On KDE Plasma, capture goes through the built-in `org.kde.KWin.ScreenShot2` D-Bus interface instead of `grim`; see [Compositor Compatibility](#compositor-compatibility).
 
 ### Build Dependencies
 
@@ -102,11 +115,22 @@ sudo apt install ./wayscrollshot_0.1.7-1ubuntu26.04_amd64.deb
 
 The Debian packages are built separately for each Ubuntu release so OpenCV runtime dependencies match that release's ABI. Do not work around missing OpenCV libraries by symlinking a different OpenCV version.
 
+`apt install ./wayscrollshot_….deb` pulls `grim`, `slurp`, and the OpenCV shared libraries recorded in the package. Do not run `apt install opencv clang`: those names are for Arch, and Ubuntu has no package called `opencv`. If the `.deb` was installed with `dpkg -i` and libraries are missing, run `sudo apt install -f`.
+
+GNOME needs the bundled Shell extension (Mutter has no layer-shell, so `slurp` and `grim` cannot run there). After installing the package, enable it and log out once:
+
+```bash
+gnome-extensions enable wayscrollshot-scroll-helper@snemc.org
+```
+
 ### From Source
 
 ```bash
-# Install runtime and build dependencies (Arch Linux)
+# Arch Linux
 sudo pacman -S slurp grim wl-clipboard opencv clang libxkbcommon
+
+# Debian / Ubuntu / Pop!_OS (package names differ from Arch)
+sudo apt install build-essential pkg-config clang libclang-dev libopencv-dev libxkbcommon-dev slurp grim wl-clipboard
 
 # Build
 cargo build --release
@@ -114,6 +138,8 @@ cargo build --release
 # Install (optional)
 cp target/release/wayscrollshot ~/.local/bin/
 ```
+
+On Ubuntu the OpenCV development package is `libopencv-dev`, not `opencv`. `clang` is only required to compile; the installed `.deb` does not need it.
 
 ### From Nix
 
@@ -165,11 +191,17 @@ wayscrollshot "$(slurp)"
 slurp | wayscrollshot -
 
 # Use different stitching algorithms
-wayscrollshot -a opencv-orb  # Default: ORB feature matching + RANSAC
+wayscrollshot -a band        # Default: eight-band match, ignores static sidebars and fixed bars
+wayscrollshot -a opencv-orb  # ORB feature matching + RANSAC
 wayscrollshot -a col-sample  # Fast column sampling
 wayscrollshot -a template    # Template matching (more accurate)
 wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
 wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
+
+# Select capture backend (auto-detected by default)
+wayscrollshot --backend grim   # wlroots: Sway, Hyprland, niri, river
+wayscrollshot --backend kwin   # KDE Plasma (KWin ScreenShot2)
+wayscrollshot --backend gnome  # GNOME Shell helper extension
 ```
 
 ### Options
@@ -181,7 +213,8 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
-| `-a, --algorithm <ALG>` | Stitching algorithm: `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | opencv-orb |
+| `-a, --algorithm <ALG>` | Stitching algorithm: `band`, `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | band |
+| `--backend <BACKEND>` | Capture backend: `auto`, `grim`, `kwin`, `gnome` | auto |
 | `REGION` | Existing slurp/grim geometry, for example `10,20 300x400`; use `-` to read stdin | Run `slurp` interactively |
 
 ### Controls
@@ -207,11 +240,29 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 
 > **Note:** Keyboard shortcuts depend on the compositor's `wlr-layer-shell` `OnDemand` keyboard focus policy. They work well under niri; on Hyprland and some other compositors you may need to hover the mouse over the control bar first. Mouse clicks on the control bar buttons work on all compositors.
 
+## Compositor Compatibility
+
+The preview overlay and region border use `wlr-layer-shell-unstable-v1`, region selection uses `slurp`, and screen capture uses a backend chosen at runtime (override with `--backend`).
+
+| Desktop | Region select | Preview / border | Capture backend | Status |
+|---------|---------------|------------------|-----------------|--------|
+| wlroots (Sway, Hyprland, niri, river) | `slurp` | layer-shell | `grim` | Works out of the box |
+| KDE Plasma (KWin) | `slurp` | layer-shell | KWin ScreenShot2 (D-Bus) | Works; needs the authorization step below |
+| GNOME (Mutter) | Shell helper | Shell helper buttons | Shell helper `ScreenshotArea` | Needs `wayscrollshot-scroll-helper@snemc.org` enabled, then a logout |
+
+### KDE authorization
+
+KWin only lets a process call `org.kde.KWin.ScreenShot2` when that process owns a `.desktop` entry declaring `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`. The deb, AUR, and Nix packages install `wayscrollshot.desktop` for this. When running a self-built binary, install that file into `/usr/share/applications/` (or `~/.local/share/applications/`), or bypass the check for a quick test:
+
+```bash
+KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1 wayscrollshot
+```
+
 ## Limitations
 
-1. **Wayland only**: X11 is not supported. The tool uses `wlr-layer-shell-unstable-v1` protocol.
+1. **Wayland only**: X11 is not supported. The preview and region border use `wlr-layer-shell-unstable-v1` (supported by wlroots compositors and KWin, not by GNOME).
 
-2. **wlroots-based compositors**: Works on Sway, Hyprland, river, etc. May not work on GNOME/KDE Wayland.
+2. **Desktop support**: See [Compositor Compatibility](#compositor-compatibility). KDE Plasma works through KWin ScreenShot2. GNOME works through the Shell helper extension; the preview overlay is replaced by Save / Copy / Pause / Cancel buttons.
 
 3. **Overlap requirement**: Each scroll step must leave some overlap with the previous view. Very fast scrolling may cause stitching failures.
 
@@ -219,17 +270,26 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 
 5. **Vertical scrolling only**: Horizontal scrolling is not currently supported.
 
-6. **Fixed header/footer**: If the page has fixed headers or footers, they will be captured repeatedly. Consider selecting a region that excludes them.
+6. **Fixed chrome**: The default `band` algorithm drops stable headers, footers, and sidebars that do not scroll with the page. A sidebar whose highlight moves much less than the article is treated as static. Select a tighter region if a bar still duplicates.
 
 ## Troubleshooting
 
+### "Unable to locate package opencv" (or `clang`)
+- That command is the Arch package list. On Ubuntu install `libopencv-dev` only when building from source, and install a release `.deb` with `sudo apt install ./wayscrollshot_….deb` when you only want to run it.
+- `grim` and `slurp` are in the Ubuntu `universe` component.
+
 ### "slurp selection failed"
-- Ensure `slurp` is installed and in PATH
+- On GNOME this is expected: enable `wayscrollshot-scroll-helper@snemc.org` and log out once. `slurp` needs `wlr-layer-shell`, which Mutter does not implement.
+- On wlroots and KDE, ensure `slurp` is installed and in PATH
 - Check if you're running on Wayland
 
 ### "layer-shell not available"
 - Your compositor doesn't support `wlr-layer-shell-unstable-v1`
-- Try a wlroots-based compositor (Sway, Hyprland)
+- Try a wlroots-based compositor (Sway, Hyprland) or KDE Plasma
+
+### "KWin denied the screenshot (NoAuthorized)" (KDE)
+- Install `wayscrollshot.desktop` (shipped by the packages) into a standard applications directory; it must declare `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`
+- For a quick test without installing it, run with `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1`
 
 ### "No overlap match"
 - Scroll more slowly

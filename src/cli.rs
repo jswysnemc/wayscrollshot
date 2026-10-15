@@ -4,7 +4,7 @@ use clap::{Parser, ValueEnum};
 
 use crate::constants::PREVIEW_MAX_WIDTH;
 
-#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum Algorithm {
     /// Column sampling (fast, good for most cases)
     ColSample,
@@ -15,9 +15,25 @@ pub enum Algorithm {
     /// FAST corner + HNSW index (high accuracy, from snow-shot)
     Fast,
     /// OpenCV ORB + brute-force matching + affine RANSAC
-    #[default]
     #[value(name = "opencv-orb")]
     OpenCvOrb,
+    /// Eight-band signature match. Ignores static sidebars and fixed header/footer bars.
+    #[default]
+    Band,
+}
+
+/// Screen capture backend.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum Backend {
+    /// Detect from the desktop session (KDE uses kwin, otherwise grim)
+    #[default]
+    Auto,
+    /// grim / wlr-screencopy (Sway, Hyprland, niri, river, ...)
+    Grim,
+    /// org.kde.KWin.ScreenShot2 D-Bus interface (KDE Plasma)
+    Kwin,
+    /// GNOME Shell scroll helper (requires the bundled extension)
+    Gnome,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -47,6 +63,10 @@ pub struct Args {
     /// Stitching algorithm to use
     #[arg(short, long, value_enum, default_value_t = Algorithm::OpenCvOrb)]
     pub algorithm: Algorithm,
+
+    /// Screen capture backend (auto detects KDE vs wlroots)
+    #[arg(long, value_enum, default_value_t = Backend::Auto)]
+    pub backend: Backend,
 
     /// Existing slurp geometry to use instead of selecting a region. Use '-' to read from stdin.
     #[arg(value_name = "REGION", num_args = 0..=2, allow_hyphen_values = true)]

@@ -8,11 +8,11 @@
 ## 功能特性
 
 - 实时预览与自动拼接
-- 列采样算法实现快速精准的重叠检测
+- 八带签名拼接，忽略静止侧栏以及固定顶栏、底栏
 - 圆角按钮 UI 与悬停效果（基于 tiny-skia）
 - 键盘快捷键与鼠标控制
 - 保存到文件或复制到剪贴板
-- 支持反向滚动(仅列采样算法)
+- 支持反向滚动（`band` 与列采样）
 
 ## 工作原理
 
@@ -21,9 +21,20 @@
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
 │   捕获模块   │────>│   拼接模块   │────>│   预览模块   │
-│   (grim)    │     │ (列采样算法) │     │ (layer-shell)│
+│   (grim)    │     │    (band)    │     │ (layer-shell)│
 └─────────────┘     └──────────────┘     └─────────────┘
 ```
+
+### 默认拼接（`band`）
+
+默认算法是 mark-shot 使用的八带行签名：
+
+1. 在画面上取八条窄竖带，每一行得到一个亮度签名。
+2. 把新帧和上一帧的同一行作比较。几乎不动的带视为静止侧栏，不参与匹配。
+3. 只在运动带上搜索滚动量，然后只追加新出现的行。
+4. 顶部或底部始终相同的行视为固定顶栏或底栏，不会重复贴上。
+
+`-a col-sample` 仍然使用下面的列采样。
 
 ### 列采样算法
 
@@ -69,10 +80,12 @@ wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了
 | 工具 / 库 | 用途 | 必需 |
 |-----------|------|------|
 | `slurp` | 区域选择 | 未传入 `REGION` 时需要 |
-| `grim` | 屏幕捕获 | 是 |
+| `grim` | wlroots 合成器上的屏幕捕获 | 仅 wlroots（KDE 不使用） |
 | OpenCV | 默认拼接算法 | 是 |
 | `wl-copy` | 剪贴板（Wayland） | 剪贴板功能需要 |
 | `xclip` | 剪贴板（X11 回退） | 备选方案 |
+
+在 KDE Plasma 上，截图通过内置的 `org.kde.KWin.ScreenShot2` D-Bus 接口完成，不使用 `grim`；详见[合成器兼容性](#合成器兼容性)。
 
 ### 构建依赖
 
@@ -102,11 +115,22 @@ sudo apt install ./wayscrollshot_0.1.7-1ubuntu26.04_amd64.deb
 
 Debian 包会按 Ubuntu 版本分别构建，OpenCV 运行时依赖会匹配对应发行版的 ABI。不要通过软链接不同版本的 OpenCV 库绕过缺失库错误。
 
+`apt install ./wayscrollshot_….deb` 会拉取 `grim`、`slurp` 以及包内记录的 OpenCV 共享库。不要执行 `apt install opencv clang`：这是 Arch 的包名，Ubuntu 没有名为 `opencv` 的包。如果用 `dpkg -i` 安装后提示缺库，执行 `sudo apt install -f`。
+
+GNOME 需要随包安装的 Shell 扩展（Mutter 没有 layer-shell，`slurp` 和 `grim` 无法在那里工作）。安装后启用扩展并重新登录一次：
+
+```bash
+gnome-extensions enable wayscrollshot-scroll-helper@snemc.org
+```
+
 ### 从源码构建
 
 ```bash
-# 安装运行时和构建依赖（Arch Linux）
+# Arch Linux
 sudo pacman -S slurp grim wl-clipboard opencv clang libxkbcommon
+
+# Debian / Ubuntu / Pop!_OS（包名与 Arch 不同）
+sudo apt install build-essential pkg-config clang libclang-dev libopencv-dev libxkbcommon-dev slurp grim wl-clipboard
 
 # 构建
 cargo build --release
@@ -114,6 +138,8 @@ cargo build --release
 # 安装（可选）
 cp target/release/wayscrollshot ~/.local/bin/
 ```
+
+Ubuntu 上的 OpenCV 开发包是 `libopencv-dev`，不是 `opencv`。`clang` 只在编译时需要，安装好的 `.deb` 不依赖它。
 
 ### 从Nix构建
 
@@ -165,11 +191,17 @@ wayscrollshot "$(slurp)"
 slurp | wayscrollshot -
 
 # 使用不同的拼接算法
-wayscrollshot -a opencv-orb  # 默认：ORB 特征匹配 + RANSAC
+wayscrollshot -a band        # 默认：八带签名，忽略静止侧栏和固定顶栏、底栏
+wayscrollshot -a opencv-orb  # ORB 特征匹配 + RANSAC
 wayscrollshot -a col-sample  # 快速列采样
 wayscrollshot -a template    # 模板匹配（更精确）
 wayscrollshot -a edge        # 边缘检测（适用于透明背景）
 wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
+
+# 选择捕获后端（默认自动检测）
+wayscrollshot --backend grim   # wlroots：Sway、Hyprland、niri、river
+wayscrollshot --backend kwin   # KDE Plasma（KWin ScreenShot2）
+wayscrollshot --backend gnome  # GNOME Shell 助手扩展
 ```
 
 ### 选项
@@ -181,7 +213,8 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
 | `--no-preview` | 禁用预览窗口 | false |
 | `--no-border` | 禁用区域边框覆盖层 | false |
-| `-a, --algorithm <ALG>` | 拼接算法：`opencv-orb`、`col-sample`、`template`、`edge`、`fast` | opencv-orb |
+| `-a, --algorithm <ALG>` | 拼接算法：`band`、`opencv-orb`、`col-sample`、`template`、`edge`、`fast` | band |
+| `--backend <BACKEND>` | 捕获后端：`auto`、`grim`、`kwin`、`gnome` | auto |
 | `REGION` | 已有 slurp/grim 几何区域，例如 `10,20 300x400`；使用 `-` 从标准输入读取 | 交互运行 `slurp` |
 
 ### 控制方式
@@ -207,11 +240,29 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 
 > **注意：** 键盘快捷键依赖合成器对 `wlr-layer-shell` `OnDemand` 键盘焦点的实现。在 niri 下工作良好；在 Hyprland 等合成器下可能需要将鼠标悬停在控制栏上才能触发。所有合成器均可通过鼠标点击控制栏按钮进行操作。
 
+## 合成器兼容性
+
+预览悬浮层与区域边框使用 `wlr-layer-shell-unstable-v1`，区域选择使用 `slurp`，屏幕捕获在运行时按合成器选择后端（可用 `--backend` 覆盖）。
+
+| 桌面环境 | 区域选择 | 预览 / 边框 | 捕获后端 | 状态 |
+|----------|----------|-------------|----------|------|
+| wlroots（Sway、Hyprland、niri、river） | `slurp` | layer-shell | `grim` | 开箱即用 |
+| KDE Plasma（KWin） | `slurp` | layer-shell | KWin ScreenShot2（D-Bus） | 可用，需完成下方授权步骤 |
+| GNOME（Mutter） | Shell 助手 | Shell 助手按钮 | Shell 助手 `ScreenshotArea` | 需启用 `wayscrollshot-scroll-helper@snemc.org` 并重新登录 |
+
+### KDE 授权
+
+KWin 仅在调用进程拥有声明 `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2` 的 `.desktop` 文件时，才允许其调用 `org.kde.KWin.ScreenShot2`。deb、AUR 与 Nix 包会安装 `wayscrollshot.desktop` 以满足此要求。运行自行构建的二进制时，请将该文件安装到 `/usr/share/applications/`（或 `~/.local/share/applications/`），或在临时测试时绕过检查：
+
+```bash
+KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1 wayscrollshot
+```
+
 ## 局限性
 
-1. **仅支持 Wayland**：不支持 X11。本工具使用 `wlr-layer-shell-unstable-v1` 协议。
+1. **仅支持 Wayland**：不支持 X11。预览与区域边框使用 `wlr-layer-shell-unstable-v1`（wlroots 合成器与 KWin 支持，GNOME 不支持）。
 
-2. **基于 wlroots 的合成器**：在 Sway、Hyprland、river 等上可用。可能无法在 GNOME/KDE Wayland 上运行。
+2. **桌面环境支持**：详见[合成器兼容性](#合成器兼容性)。KDE Plasma 通过 KWin ScreenShot2 支持。GNOME 通过 Shell 助手扩展支持；预览浮层改为保存、复制、暂停、取消按钮。
 
 3. **重叠要求**：每次滚动必须与前一视图保留一些重叠。滚动过快可能导致拼接失败。
 
@@ -219,17 +270,26 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 
 5. **仅支持垂直滚动**：目前不支持水平滚动。
 
-6. **固定页眉/页脚**：如果页面有固定的页眉或页脚，它们会被重复捕获。建议选择排除它们的区域。
+6. **固定区域**：默认 `band` 算法会去掉不随页面滚动的顶栏、底栏和侧栏。高亮移动幅度明显小于正文的侧栏会按静止区域处理。如果某条栏仍然重复，请把选区收紧。
 
 ## 故障排除
 
+### "Unable to locate package opencv"（或 `clang`）
+- 那条命令是 Arch 的包列表。只想运行时，用 `sudo apt install ./wayscrollshot_….deb` 安装发布包。只有从源码编译时才需要 Ubuntu 上的 `libopencv-dev`。
+- `grim` 和 `slurp` 位于 Ubuntu 的 `universe` 组件。
+
 ### "slurp selection failed"
-- 确保 `slurp` 已安装且在 PATH 中
+- 在 GNOME 上这是预期情况：启用 `wayscrollshot-scroll-helper@snemc.org` 并重新登录一次。`slurp` 依赖 `wlr-layer-shell`，Mutter 没有实现它。
+- 在 wlroots 和 KDE 上，确保 `slurp` 已安装且在 PATH 中
 - 检查是否在 Wayland 上运行
 
 ### "layer-shell not available"
 - 你的合成器不支持 `wlr-layer-shell-unstable-v1`
-- 尝试使用基于 wlroots 的合成器（Sway、Hyprland）
+- 尝试使用基于 wlroots 的合成器（Sway、Hyprland）或 KDE Plasma
+
+### "KWin denied the screenshot (NoAuthorized)"（KDE）
+- 将 `wayscrollshot.desktop`（随包安装）放入标准应用目录；它必须声明 `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`
+- 临时测试时，可用 `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1` 运行
 
 ### "No overlap match"
 - 滚动慢一些

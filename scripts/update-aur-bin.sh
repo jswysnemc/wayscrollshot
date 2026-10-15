@@ -52,6 +52,19 @@ sha256sums=('${sha256}')
 
 package() {
     install -Dm755 wayscrollshot "\${pkgdir}/usr/bin/wayscrollshot"
+    install -d "\${pkgdir}/usr/share/applications"
+    cat >"\${pkgdir}/usr/share/applications/wayscrollshot.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=wayscrollshot
+GenericName=Scrolling Screenshot
+Comment=Capture and stitch scrolling screenshots on Wayland
+Exec=wayscrollshot
+Terminal=false
+NoDisplay=true
+Categories=Graphics;
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
+DESKTOP
 }
 EOF
 

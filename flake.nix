@@ -86,6 +86,12 @@
             # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is fixed
             auditable = false;
 
+            # Install the KDE D-Bus authorization entry so KWin's ScreenShot2
+            # interface accepts capture requests on Plasma.
+            postInstall = ''
+              install -Dm644 ${./wayscrollshot.desktop} "$out/share/applications/wayscrollshot.desktop"
+            '';
+
             meta = {
               homepage = "https://github.com/jswysnemc/wayscrollshot";
               description = "A scrolling screenshot tool for Wayland write in Rust.";

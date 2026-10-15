@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=wayscrollshot
+GenericName=Scrolling Screenshot
+Comment=Capture and stitch scrolling screenshots on Wayland
+Exec=wayscrollshot
+Terminal=false
+NoDisplay=true
+Categories=Graphics;
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

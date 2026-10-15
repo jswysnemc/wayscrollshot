@@ -1,0 +1,7 @@
+{
+  "uuid": "wayscrollshot-scroll-helper@snemc.org",
+  "name": "wayscrollshot Scroll Helper",
+  "description": "Lets wayscrollshot select a region and capture frames on GNOME, which does not provide wlr-layer-shell.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/jswysnemc/wayscrollshot"
+}

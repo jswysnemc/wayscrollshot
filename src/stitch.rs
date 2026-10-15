@@ -16,6 +16,7 @@ mod column_match;
 mod fast_match;
 mod opencv_orb;
 mod template_match;
+mod band;
 #[cfg(test)]
 mod tests;
 
@@ -200,8 +201,10 @@ pub struct Stitcher {
     last_offset: i32,
     stats: StitchStats,
     config: MatchConfig,
+    band: Option<band::BandStitcher>,
 }
 
+#[derive(Debug)]
 pub enum StitchOutcome {
     FirstFrame,
     Appended { added: u32 },
@@ -231,6 +234,7 @@ impl Stitcher {
                 last_append: 0,
             },
             config,
+            band: None,
         }
     }
 
@@ -240,6 +244,10 @@ impl Stitcher {
             frame.width(),
             frame.height()
         );
+        let frame = match self.push_band_frame_if_enabled(frame) {
+            Ok(outcome) => return outcome,
+            Err(frame) => frame,
+        };
 
         if self.full_image.is_none() {
             let height = frame.height();
@@ -267,7 +275,9 @@ impl Stitcher {
             Algorithm::Fast => self.find_offset_fast(&frame),
             Algorithm::Template => self.find_offset_template(&frame),
             Algorithm::OpenCvOrb => self.find_offset_opencv_orb(&frame),
-            Algorithm::ColSample | Algorithm::Edge => self.find_offset_colsample(&frame),
+            Algorithm::ColSample | Algorithm::Edge | Algorithm::Band => {
+                self.find_offset_colsample(&frame)
+            }
         };
 
         log::info!(
@@ -572,11 +582,53 @@ impl Stitcher {
     }
 
     pub fn full_image(&self) -> Option<Arc<RgbaImage>> {
+        if let Some(image) = self.band_full_image_if_enabled() {
+            return image;
+        }
         self.full_image.clone()
     }
 
     pub fn stats(&self) -> StitchStats {
+        if let Some(stats) = self.band_stats_if_enabled() {
+            return stats;
+        }
         self.stats.clone()
+    }
+
+    /// 带状拼接开关。关闭时 `push_frame` 继续走原有算法。
+    const FEATURE_BAND_STITCH_ENABLED: bool = band::FEATURE_BAND_STITCH_ENABLED;
+
+    /// 在开关打开且算法为 band 时提交帧；否则把帧原样交还。
+    ///
+    /// `frame` 为新捕获帧；成功时返回拼接结果，关闭时返回原帧。
+    fn push_band_frame_if_enabled(
+        &mut self,
+        frame: RgbaImage,
+    ) -> Result<StitchOutcome, RgbaImage> {
+        if !Self::FEATURE_BAND_STITCH_ENABLED || self.config.algorithm != Algorithm::Band {
+            return Err(frame);
+        }
+        if self.band.is_none() {
+            self.band = Some(band::BandStitcher::new());
+        }
+        let stitcher = self.band.as_mut().expect("band stitcher");
+        Ok(stitcher.push(frame))
+    }
+
+    /// 开关打开时返回带状长图；关闭时返回 None，让原有路径继续。
+    fn band_full_image_if_enabled(&self) -> Option<Option<Arc<RgbaImage>>> {
+        if !Self::FEATURE_BAND_STITCH_ENABLED || self.config.algorithm != Algorithm::Band {
+            return None;
+        }
+        Some(self.band.as_ref().and_then(|stitcher| stitcher.full_image()))
+    }
+
+    /// 开关打开时返回带状统计；关闭时返回 None，让原有路径继续。
+    fn band_stats_if_enabled(&self) -> Option<StitchStats> {
+        if !Self::FEATURE_BAND_STITCH_ENABLED || self.config.algorithm != Algorithm::Band {
+            return None;
+        }
+        self.band.as_ref().map(|stitcher| stitcher.stats())
     }
 }
 

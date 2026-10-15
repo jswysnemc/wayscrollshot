@@ -4,10 +4,19 @@ use std::process::Command;
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 
+use crate::cli::Backend;
 use crate::types::Region;
+
+mod kwin;
+pub(crate) mod gnome;
+
+use kwin::KwinCapturer;
 
 /// Prompts the user to select a capture region with `slurp`.
 pub fn select_region() -> Result<Region> {
+    if let Some(region) = gnome::select_region_if_enabled() {
+        return region;
+    }
     let output = Command::new("slurp")
         .arg("-f")
         .arg("%x,%y %wx%h")
@@ -66,8 +75,71 @@ fn parse_region(raw: &str) -> Result<Region> {
     })
 }
 
-/// Captures a PNG frame from the selected region via `grim`.
-pub fn capture_frame(region: &Region) -> Result<RgbaImage> {
+/// A capture backend resolved for the current session.
+pub enum Capturer {
+    /// `grim` (wlroots `wlr-screencopy`): Sway, Hyprland, niri, river, ...
+    Grim,
+    /// `org.kde.KWin.ScreenShot2` D-Bus interface: KDE Plasma / KWin.
+    Kwin(KwinCapturer),
+    /// GNOME Shell scroll helper. Mutter has no wlr-screencopy.
+    Gnome(gnome::GnomeCapturer),
+}
+
+impl Capturer {
+    /// Resolves the backend from the requested kind, probing the desktop
+    /// environment when [`Backend::Auto`].
+    pub fn new(backend: Backend) -> Result<Self> {
+        let resolved = match backend {
+            Backend::Auto => detect_backend(),
+            Backend::Grim => Backend::Grim,
+            Backend::Kwin => Backend::Kwin,
+            Backend::Gnome => Backend::Gnome,
+        };
+        match resolved {
+            Backend::Kwin => {
+                log::info!("Using KWin ScreenShot2 capture backend");
+                Ok(Capturer::Kwin(KwinCapturer::new()?))
+            }
+            Backend::Gnome => {
+                log::info!("Using GNOME Shell capture backend");
+                Ok(Capturer::Gnome(gnome::GnomeCapturer::new()?))
+            }
+            // Auto already collapsed to a concrete backend; the rest is grim.
+            _ => {
+                log::info!("Using grim capture backend");
+                Ok(Capturer::Grim)
+            }
+        }
+    }
+
+    /// Captures a single frame of the region.
+    pub fn capture(&self, region: &Region) -> Result<RgbaImage> {
+        match self {
+            Capturer::Grim => capture_frame_grim(region),
+            Capturer::Kwin(capturer) => capturer.capture(region),
+            Capturer::Gnome(capturer) => capturer.capture(region),
+        }
+    }
+}
+
+/// Picks a backend from the running desktop. KWin lacks `wlr-screencopy`
+/// (so `grim` fails there), while wlroots compositors lack ScreenShot2.
+fn detect_backend() -> Backend {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let is_kde = desktop
+        .split(':')
+        .any(|entry| entry.eq_ignore_ascii_case("KDE"));
+    if is_kde {
+        Backend::Kwin
+    } else if gnome::is_gnome_session() {
+        Backend::Gnome
+    } else {
+        Backend::Grim
+    }
+}
+
+/// Captures a PNG frame from the region via `grim` (wlroots compositors).
+fn capture_frame_grim(region: &Region) -> Result<RgbaImage> {
     log::debug!("grim capture region: {}", region.raw);
     let output = Command::new("grim")
         .arg("-g")
