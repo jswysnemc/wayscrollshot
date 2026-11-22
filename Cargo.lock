@@ -1415,9 +1415,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opencv"
-version = "0.99.0"
+version = "0.102.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e64a4ee03d2ec18c19d62b7fa4f570840c424853343ac085a9e3cedc60d88c4b"
+checksum = "b23fa78053560ec819ff3768f3d07768124d9338a494e9ca50325e9f1522c435"
 dependencies = [
  "cc",
  "dunce",
@@ -1430,18 +1430,18 @@ dependencies = [
  "shlex 2.0.1",
  "vcpkg",
  "windows",
+ "winsplit",
 ]
 
 [[package]]
 name = "opencv-binding-generator"
-version = "0.102.0"
+version = "0.108.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6df5c8a6b61606e5581388ce115393f14691d9bbb1756a364c559d94a466405"
+checksum = "826d04344f6e833136bd6a261a48695f3eb900e5a7dc7c111f92d6adcadc279e"
 dependencies = [
  "clang",
  "clang-sys",
  "dunce",
- "percent-encoding",
  "regex",
  "semver",
  "shlex 2.0.1",
@@ -1483,12 +1483,6 @@ name = "pastey"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
-
-[[package]]
-name = "percent-encoding"
-version = "2.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pin-project-lite"
@@ -2652,6 +2646,12 @@ checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "winsplit"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ab703352da6a72f35c39a533526393725640575bb211f61987a2748323ad956"
 
 [[package]]
 name = "wit-bindgen"
