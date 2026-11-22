@@ -8,6 +8,7 @@ use image::RgbaImage;
 
 use crate::capture::{read_region_from_stdin, region_from_slurp_output, select_region, Capturer};
 use crate::cli::{Algorithm, Args};
+use crate::idle_finish::IdleAutoFinish;
 use crate::output::{copy_to_clipboard, save_image};
 use crate::overlay::LayerShellOverlay;
 use crate::region_overlay::RegionOverlay;
@@ -46,11 +47,26 @@ pub fn run(args: Args) -> Result<()> {
     let state = Arc::new(Mutex::new(StitchState::default()));
 
     let (command_tx, command_rx) = mpsc::channel();
+    let auto_save_idle = args.effective_auto_save_idle();
 
     let mut layer_overlay = start_preview_overlay(&args, &region, command_tx.clone());
-    let _fallback_controls = attach_fallback_controls(layer_overlay.is_none(), &region, command_tx);
+    let fallback_controls = attach_fallback_controls(
+        layer_overlay.is_none(),
+        &args,
+        &region,
+        command_tx.clone(),
+        auto_save_idle.is_some(),
+    );
+    let fail_on_action_error =
+        layer_overlay.is_none() && !fallback_controls.has_interactive_control;
 
     let preview_tx = layer_overlay.as_ref().and_then(|o| o.sender());
+    let worker_command_tx = auto_save_idle.map(|_| command_tx);
+    let auto_finish_command = if args.clipboard {
+        UserCommand::Copy
+    } else {
+        UserCommand::Save
+    };
     let algorithm = args.algorithm;
     let worker = spawn_capture_worker(
         capturer,
@@ -60,6 +76,9 @@ pub fn run(args: Args) -> Result<()> {
         preview_tx,
         args.preview_width,
         algorithm,
+        auto_save_idle,
+        auto_finish_command,
+        worker_command_tx,
     );
 
     let result = run_session(
@@ -69,6 +88,7 @@ pub fn run(args: Args) -> Result<()> {
         &mut layer_overlay,
         command_rx,
         &args,
+        fail_on_action_error,
     );
 
     if let Some(ref mut overlay) = region_overlay {
@@ -87,7 +107,11 @@ fn resolve_region(args: &Args) -> Result<Region> {
     }
 }
 
-/// Handles overlay commands and finalization while capture worker is running.
+/// 处理浮层或自动完成指令，直到会话结束并回收捕获线程
+///
+/// `control` 为运行控制标志，`state` 为拼接状态，`worker` 为捕获线程句柄，
+/// `layer_overlay` 为预览浮层，`command_rx` 为指令接收端，`args` 为命令行参数，
+/// `fail_on_action_error` 表示保存或复制失败时是否直接返回错误退出；返回会话执行结果
 fn run_session(
     control: Arc<Control>,
     state: Arc<Mutex<StitchState>>,
@@ -95,9 +119,12 @@ fn run_session(
     layer_overlay: &mut Option<LayerShellOverlay>,
     command_rx: mpsc::Receiver<UserCommand>,
     args: &Args,
+    fail_on_action_error: bool,
 ) -> Result<()> {
     let mut paused = false;
+    let mut session_error: Option<anyhow::Error> = None;
 
+    // 1. 持续消费用户或空闲自动完成发出的控制指令
     while let Ok(command) = command_rx.recv() {
         match command {
             UserCommand::TogglePause => {
@@ -110,23 +137,33 @@ fn run_session(
             UserCommand::Save => {
                 match take_snapshot(&state).and_then(|img| save_image(img, args.output.clone())) {
                     Ok(path) => {
-                        log::info!("Saved to {}", path.display());
+                        log::info!("【长截图会话】【保存完成】已保存到 {}", path.display());
                         control.stop();
                         break;
                     }
                     Err(err) => {
-                        log::error!("Save failed: {err}");
+                        log::error!("【长截图会话】【保存失败】保存截图失败: {err}");
+                        if fail_on_action_error {
+                            session_error = Some(err);
+                            control.stop();
+                            break;
+                        }
                     }
                 }
             }
             UserCommand::Copy => match take_snapshot(&state).and_then(copy_to_clipboard) {
                 Ok(()) => {
-                    log::info!("Copied to clipboard");
+                    log::info!("【长截图会话】【复制完成】已复制到剪贴板");
                     control.stop();
                     break;
                 }
                 Err(err) => {
-                    log::error!("Copy failed: {err}");
+                    log::error!("【长截图会话】【复制失败】复制到剪贴板失败: {err}");
+                    if fail_on_action_error {
+                        session_error = Some(err);
+                        control.stop();
+                        break;
+                    }
                 }
             },
             UserCommand::Cancel => {
@@ -136,11 +173,15 @@ fn run_session(
         }
     }
 
+    // 2. 停止工作线程与预览浮层并返回结果
     control.stop();
     if let Some(ref mut overlay) = layer_overlay {
         overlay.stop();
     }
     let _ = worker.join();
+    if let Some(err) = session_error {
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -164,7 +205,13 @@ fn is_wayland_session() -> bool {
     )
 }
 
-/// Spawns background capture + stitching worker.
+/// 启动后台截屏与拼接工作线程，并在启用空闲自动完成时负责触发最终保存或复制
+///
+/// `capturer` 为截屏后端，`region` 为选区，`control` 为运行控制标志，`state` 为共享拼接状态，
+/// `preview_tx` 为预览通道，`preview_width` 为预览宽度，`algorithm` 为拼接算法，
+/// `auto_save_idle` 为空闲自动完成时长，`auto_finish_command` 为自动完成指令，
+/// `command_tx` 为会话指令发送端；返回工作线程句柄
+#[allow(clippy::too_many_arguments)]
 fn spawn_capture_worker(
     capturer: Capturer,
     region: Region,
@@ -173,6 +220,9 @@ fn spawn_capture_worker(
     preview_tx: Option<mpsc::Sender<LayerMessage>>,
     preview_width: u32,
     algorithm: Algorithm,
+    auto_save_idle: Option<Duration>,
+    auto_finish_command: UserCommand,
+    command_tx: Option<mpsc::Sender<UserCommand>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let config = match algorithm {
@@ -197,12 +247,13 @@ fn spawn_capture_worker(
             init_opencv_runtime();
         }
         let mut stitcher = Stitcher::new(config);
+        let mut idle_finish = IdleAutoFinish::new(auto_save_idle);
         let mut last_capture_end: Option<Instant> = None;
         let mut last_signature: Option<Vec<u8>> = None;
-        let mut last_capture_error: Option<String> = None;
 
         while control.is_running() {
             if control.is_paused() {
+                idle_finish.on_paused();
                 update_status(&state, "Paused".to_string(), None, None, None);
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
@@ -217,8 +268,8 @@ fn spawn_capture_worker(
 
             match capturer.capture(&region) {
                 Ok(frame) => {
-                    last_capture_end = Some(Instant::now());
-                    last_capture_error = None;
+                    let now = Instant::now();
+                    last_capture_end = Some(now);
 
                     let signature = frame_signature(&frame, SIGNATURE_COLS, SIGNATURE_ROWS);
                     if let Some(previous) = last_signature.as_ref() {
@@ -230,6 +281,14 @@ fn spawn_capture_worker(
                                 None,
                                 None,
                             );
+                            if maybe_trigger_idle_finish(
+                                &mut idle_finish,
+                                now,
+                                &command_tx,
+                                &auto_finish_command,
+                            ) {
+                                break;
+                            }
                             continue;
                         }
                     }
@@ -238,6 +297,7 @@ fn spawn_capture_worker(
                     let outcome = stitcher.push_frame(frame);
                     match outcome {
                         StitchOutcome::FirstFrame => {
+                            idle_finish.on_first_frame(now);
                             apply_state_update(
                                 &state,
                                 &stitcher,
@@ -247,6 +307,7 @@ fn spawn_capture_worker(
                             );
                         }
                         StitchOutcome::Appended { added } => {
+                            idle_finish.on_appended(now);
                             apply_state_update(
                                 &state,
                                 &stitcher,
@@ -274,6 +335,15 @@ fn spawn_capture_worker(
                             );
                         }
                     }
+
+                    if maybe_trigger_idle_finish(
+                        &mut idle_finish,
+                        Instant::now(),
+                        &command_tx,
+                        &auto_finish_command,
+                    ) {
+                        break;
+                    }
                 }
                 Err(err) => {
                     update_status(
@@ -283,10 +353,42 @@ fn spawn_capture_worker(
                         None,
                         Some(err.to_string()),
                     );
+                    if maybe_trigger_idle_finish(
+                        &mut idle_finish,
+                        Instant::now(),
+                        &command_tx,
+                        &auto_finish_command,
+                    ) {
+                        break;
+                    }
                 }
             }
         }
     })
+}
+
+/// 在满足空闲超时条件时发送自动完成指令
+///
+/// `idle_finish` 为空闲控制器，`now` 为当前时间戳，`command_tx` 为会话指令发送端，
+/// `auto_finish_command` 为需要触发的最终指令；返回是否已触发自动完成
+fn maybe_trigger_idle_finish(
+    idle_finish: &mut IdleAutoFinish,
+    now: Instant,
+    command_tx: &Option<mpsc::Sender<UserCommand>>,
+    auto_finish_command: &UserCommand,
+) -> bool {
+    if !idle_finish.should_trigger(now, false) {
+        return false;
+    }
+
+    log::info!(
+        "【长截图会话】【空闲自动完成】滚动已停止，触发自动完成指令: {:?}",
+        auto_finish_command
+    );
+    if let Some(tx) = command_tx {
+        let _ = tx.send(auto_finish_command.clone());
+    }
+    true
 }
 
 /// Applies a successful stitch update and publishes preview frame.
@@ -372,10 +474,11 @@ fn is_duplicate_signature(previous: &[u8], current: &[u8]) -> bool {
     avg <= DUPLICATE_AVG_DIFF && max_diff <= DUPLICATE_MAX_DIFF
 }
 
-/// layer-shell 不可用时仍保留命令发送端，避免会话立刻结束。
+/// layer-shell 不可用时保存回退控制句柄
 struct FallbackControls {
     _thread: Option<thread::JoinHandle<()>>,
     _tx: Option<mpsc::Sender<UserCommand>>,
+    has_interactive_control: bool,
 }
 
 /// 尝试绘制区域边框；失败时继续捕获。
@@ -388,7 +491,7 @@ fn start_region_border(args: &Args, region: &Region) -> Option<RegionOverlay> {
     match RegionOverlay::new(region.clone()) {
         Ok(overlay) => Some(overlay),
         Err(err) => {
-            log::warn!("【区域边框】【启动】layer-shell 不可用: {err}");
+            log::info!("【区域边框】【启动】layer-shell 不可用: {err}");
             None
         }
     }
@@ -408,32 +511,39 @@ fn start_preview_overlay(
     match LayerShellOverlay::new(command_tx, region.clone(), args.preview_width) {
         Ok(overlay) => Some(overlay),
         Err(err) => {
-            log::warn!("【预览浮层】【启动】layer-shell 不可用: {err}");
+            log::info!("【预览浮层】【启动】layer-shell 不可用: {err}");
             None
         }
     }
 }
 
-/// 没有预览浮层时改用 GNOME 按钮或终端命令。
+/// 没有预览浮层时按模式改用 GNOME 按钮、终端命令或空闲自动完成
 ///
-/// `needed` 表示浮层没有起来，`tx` 为会话命令通道；返回需保持存活的句柄。
+/// `needed` 表示预览浮层未启动，`args` 为命令行参数，`region` 为选区，
+/// `tx` 为会话命令通道，`auto_save_enabled` 表示是否启用了空闲自动完成；返回需保持存活的句柄
 fn attach_fallback_controls(
     needed: bool,
+    args: &Args,
     region: &Region,
     tx: mpsc::Sender<UserCommand>,
+    auto_save_enabled: bool,
 ) -> FallbackControls {
     if !needed {
         return FallbackControls {
             _thread: None,
             _tx: None,
+            has_interactive_control: false,
         };
     }
-    if crate::capture::gnome::is_gnome_session() {
+
+    // 1. 仅在未显式禁用预览时，在 GNOME 会话下启用扩展控制条
+    if !args.no_preview && crate::capture::gnome::is_gnome_session() {
         match GnomeControls::spawn(region, tx.clone()) {
             Ok(thread) => {
                 return FallbackControls {
                     _thread: Some(thread),
                     _tx: None,
+                    has_interactive_control: true,
                 };
             }
             Err(err) => {
@@ -441,21 +551,45 @@ fn attach_fallback_controls(
             }
         }
     }
-    if io::stdin().is_terminal() {
-        eprintln!(
-            "Preview overlay is unavailable. Type a command and press Enter: s save, c copy, p pause, q cancel"
-        );
+
+    // 2. 在交互式终端且未占用 stdin 读取选区时，允许通过终端命令提前结束或暂停
+    let stdin_used_for_region = args.slurp_output().as_deref() == Some("-");
+    if !stdin_used_for_region && io::stdin().is_terminal() {
+        if auto_save_enabled {
+            eprintln!(
+                "Preview overlay disabled. Scrolling will auto-finish after idle, or type a command and press Enter: s save, c copy, p pause, q cancel"
+            );
+        } else {
+            eprintln!(
+                "Preview overlay is unavailable. Type a command and press Enter: s save, c copy, p pause, q cancel"
+            );
+        }
         return FallbackControls {
             _thread: Some(spawn_stdin_commands(tx)),
             _tx: None,
+            has_interactive_control: true,
         };
     }
+
+    // 3. 非交互环境下若启用了空闲自动完成，直接交由工作线程在空闲后触发保存或复制
+    if auto_save_enabled {
+        log::info!(
+            "【预览浮层】【非交互模式】已禁用预览浮层，将在滚动空闲后自动完成并退出"
+        );
+        return FallbackControls {
+            _thread: None,
+            _tx: None,
+            has_interactive_control: false,
+        };
+    }
+
     log::error!(
         "【预览浮层】【回退】没有可用的控制界面。在终端中运行，或启用 GNOME 滚动助手。"
     );
     FallbackControls {
         _thread: None,
         _tx: Some(tx),
+        has_interactive_control: false,
     }
 }
 
