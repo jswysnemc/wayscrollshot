@@ -105,6 +105,16 @@ wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了
 
 ## 安装
 
+### Arch Linux（AUR）
+
+可通过 AUR 安装预编译包 `wayscrollshot-bin`：
+
+```bash
+yay -S wayscrollshot-bin
+# 或
+paru -S wayscrollshot-bin
+```
+
 ### Debian / Ubuntu
 
 从 GitHub Releases 下载与 Ubuntu 版本和 CPU 架构匹配的 `.deb` 包，然后用 `apt` 安装：
@@ -178,8 +188,11 @@ wayscrollshot -c
 # 自定义预览宽度
 wayscrollshot -w 320
 
-# 禁用预览窗口
-wayscrollshot --no-preview
+# 禁用预览窗口（滚动停止 2 秒后自动保存并退出）
+wayscrollshot --no-preview -o /tmp/capture.png "100,100 800x600"
+
+# 自定义无滚动更新后的自动保存/复制等待时长
+wayscrollshot --no-preview --auto-save-after-idle 3s -o /tmp/capture.png "100,100 800x600"
 
 # 禁用区域边框覆盖层
 wayscrollshot --no-border
@@ -211,7 +224,8 @@ wayscrollshot --backend gnome  # GNOME Shell 助手扩展
 | `-o, --output <PATH>` | 输出文件路径 | `~/Pictures/wayscrollshot/wayscrollshot-<时间戳>.png` |
 | `-w, --preview-width <PX>` | 预览宽度（像素） | 280 |
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
-| `--no-preview` | 禁用预览窗口 | false |
+| `--no-preview` | 禁用预览窗口，并在滚动空闲后自动完成退出（默认 2 秒） | false |
+| `--auto-save-after-idle <DURATION>` | 无滚动更新达到指定时长后自动保存（配合 `-c` 则复制）并退出（如 `2s`、`1500ms`、`2.5`） | 启用 `--no-preview` 时为 `2s`，否则关闭 |
 | `--no-border` | 禁用区域边框覆盖层 | false |
 | `-a, --algorithm <ALG>` | 拼接算法：`band`、`opencv-orb`、`col-sample`、`template`、`edge`、`fast` | band |
 | `--backend <BACKEND>` | 捕获后端：`auto`、`grim`、`kwin`、`gnome` | auto |

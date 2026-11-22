@@ -105,6 +105,16 @@ OpenCV development files and Clang are required when building from source.
 
 ## Installation
 
+### Arch Linux (AUR)
+
+Install the prebuilt package from the AUR:
+
+```bash
+yay -S wayscrollshot-bin
+# or
+paru -S wayscrollshot-bin
+```
+
 ### Debian / Ubuntu
 
 Download the `.deb` package that matches your Ubuntu release and CPU architecture from GitHub Releases, then install it with `apt`:
@@ -178,8 +188,11 @@ wayscrollshot -c
 # Custom preview width
 wayscrollshot -w 320
 
-# Disable preview window
-wayscrollshot --no-preview
+# Disable preview window (auto-saves after scrolling stops for 2s)
+wayscrollshot --no-preview -o /tmp/capture.png "100,100 800x600"
+
+# Custom idle duration before automatic save/copy and exit
+wayscrollshot --no-preview --auto-save-after-idle 3s -o /tmp/capture.png "100,100 800x600"
 
 # Disable region border overlay
 wayscrollshot --no-border
@@ -211,7 +224,8 @@ wayscrollshot --backend gnome  # GNOME Shell helper extension
 | `-o, --output <PATH>` | Output file path | `~/Pictures/wayscrollshot/wayscrollshot-<timestamp>.png` |
 | `-w, --preview-width <PX>` | Preview width in pixels | 280 |
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
-| `--no-preview` | Disable preview window | false |
+| `--no-preview` | Disable preview window and auto-finish after idle (default 2s) | false |
+| `--auto-save-after-idle <DURATION>` | Auto-save (or copy with `-c`) and exit after idle without scroll updates (e.g. `2s`, `1500ms`, `2.5`) | `2s` with `--no-preview`, disabled otherwise |
 | `--no-border` | Disable region border overlay | false |
 | `-a, --algorithm <ALG>` | Stitching algorithm: `band`, `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | band |
 | `--backend <BACKEND>` | Capture backend: `auto`, `grim`, `kwin`, `gnome` | auto |
